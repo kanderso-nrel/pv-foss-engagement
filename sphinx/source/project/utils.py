@@ -2,6 +2,7 @@
 import pandas as pd
 import pathlib
 import requests
+import bs4
 import re
 import os
 import numpy as np
@@ -194,3 +195,64 @@ def plot_github_contributors_timeseries(gh):
     p.yaxis.axis_label = 'Total Contributors'
     p.xaxis.axis_label = 'Date'
     return p
+
+
+def fetch_gs_citations(publication_id):
+    # TODO: this function is rather buggy, for example it sometimes returns
+    # other junk instead of the year.  it would be better (but probably
+    # much slower) to parse the bibtex entry for each citation.
+
+    url = f'https://scholar.google.com/scholar?hl=en&as_sdt=4005&sciodt=0,6&cites={publication_id}&scipsc='
+    
+    results = []
+    
+    while True:
+
+        response = requests.get(url)
+        if b'block will expire' or b"verify that you're not a robot" in response.content:
+            raise Exception('rate limit')
+
+        soup = bs4.BeautifulSoup(response.content, features='lxml')
+
+        page_records = soup.find_all(attrs={'class': 'gs_r gs_or gs_scl'})
+        for record in page_records:
+            result = {}
+    
+            title_element = record.find(attrs={'class': 'gs_rt'})
+            title_link = title_element.find('a')
+            if title_link is not None:
+                result['title'] = title_link.text
+                result['url'] = title_link.attrs['href']
+            else:
+                result['title'] = title_element.find_all('span')[-1].text
+                result['url'] = None
+    
+            author_element = record.find(attrs={'class': 'gs_a'})
+            fields = re.split("\s- ", author_element.text)
+            if len(fields) == 3:
+                authors, journal_year, _ = fields
+                if "," in journal_year:
+                    journal, year = journal_year.rsplit(", ", 1)
+                else:
+                    year = journal_year
+                    journal = None
+            else:
+                authors = fields[0]
+                journal = None
+                year = None
+    
+            result['authors'] = authors
+            result['year'] = year
+            result['journal'] = journal
+    
+            results.append(result)
+    
+        next_page_nav = soup.find(attrs={'class': 'gs_ico gs_ico_nav_next'})
+        if next_page_nav is None:
+            break
+    
+        url = 'https://scholar.google.com' + next_page_nav.parent.attrs['href']
+        time.sleep(2)
+
+    df = pd.DataFrame(results)
+    return df
